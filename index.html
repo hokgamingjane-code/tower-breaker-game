@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>တာဝါချိုးဂိမ်း - Tower Breaker</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: sans-serif;
+    color: #fff;
+    overflow: hidden;
+  }
+  #gameContainer {
+    position: relative;
+    box-shadow: 0 0 30px rgba(0,255,200,0.3);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  canvas { display: block; background: #0f0f1e; }
+  #hud {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+    font-size: 16px;
+    font-weight: bold;
+    text-shadow: 0 2px 4px #000;
+  }
+  .hud-item { background: rgba(0,0,0,0.5); padding: 6px 12px; border-radius: 6px; }
+  #hpBar { color: #ff4d6d; }
+  #scoreBar { color: #4dffb8; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
+    z-index: 10;
+  }
+  #overlay h1 { font-size: 32px; margin-bottom: 10px; color: #4dffb8; }
+  #overlay p { margin-bottom: 8px; line-height: 1.6; font-size: 14px; color: #ccc; }
+  #overlay button {
+    margin-top: 18px;
+    padding: 12px 30px;
+    font-size: 18px;
+    font-weight: bold;
+    background: #4dffb8;
+    color: #0f0f1e;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+  #overlay button:hover { transform: scale(1.08); }
+  .hidden { display: none !important; }
+  #controls {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #888;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="game" width="800" height="600"></canvas>
+  <div id="hud">
+    <div class="hud-item" id="hpBar">❤ HP: 100</div>
+    <div class="hud-item" id="scoreBar">⭐ Score: 0</div>
+  </div>
+  <div id="overlay">
+    <h1>🗼 တာဝါချိုးဂိမ်း</h1>
+    <p>ရန်သူတာဝါတွေကို ချိုးဖျက်ပါ!</p>
+    <p>🎮 WASD / Arrow keys — ရွှေ့ရန်</p>
+    <p>🖱️ Mouse / Space — ပစ်ခုတ်ရန်</p>
+    <p>🟢 စိမ်းတာဝါ = ချိုးရမယ့် ရန်သူ</p>
+    <p>🔴 အနီအခြမ်း = ရန်သူပစ်ခုတ်ချက် (ရှောင်ပါ)</p>
+    <button id="startBtn">စတင်မယ်</button>
+  </div>
+</div>
+<div id="controls">ကီးဘုတ်: WASD / Arrows | ပစ်ခုတ်: Space / Mouse Click</div>
+
+<script>
+(function() {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const hpBar = document.getElementById('hpBar');
+  const scoreBar = document.getElementById('scoreBar');
+
+  // Game state
+  let state = 'menu'; // menu | playing | gameover | win
+  let keys = {};
+  let mouse = { x: W/2, y: H/2, down: false };
+  let score = 0;
+  let time = 0;
+
+  // Player
+  const player = {
+    x: W/2, y: H/2, r: 16, speed: 3.2,
+    hp: 100, maxHp: 100,
+    shootCooldown: 0, invuln: 0
+  };
+
+  // Bullets
+  let bullets = [];      // player bullets
+  let enemyBullets = []; // enemy bullets
+  let particles = [];
+
+  // Towers
+  let towers = [];
+
+  // Create towers
+  function createTowers() {
+    towers = [];
+    const layout = [
+      { x: 150, y: 150, hp: 100, maxHp: 100 },
+      { x: W-150, y: 150, hp: 100, maxHp: 100 },
+      { x: 150, y: H-150, hp: 100, maxHp: 100 },
+      { x: W-150, y: H-150, hp: 100, maxHp: 100 },
+      { x: W/2, y: 130, hp: 150, maxHp: 150 },
+    ];
+    for (const t of layout) {
+      towers.push({
+        x: t.x, y: t.y, r: 26,
+        hp: t.hp, maxHp: t.maxHp,
+        shootTimer: Math.random() * 60,
+        shootInterval: 90,
+        alive: true
+      });
+    }
+  }
+
+  // Input
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === ' ') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - rect.left) * (W / rect.width);
+    mouse.y = (e.clientY - rect.top) * (H / rect.height);
+  });
+  canvas.addEventListener('mousedown', e => { mouse.down = true; e.preventDefault(); });
+  canvas.addEventListener('mouseup', () => { mouse.down = false; });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Touch controls
+  let touchTarget = null;
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const tx = (t.clientX - rect.left) * (W / rect.width);
+    const ty = (t.clientY - rect.top) * (H / rect.height);
+    touchTarget = { x: tx, y: ty };
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    touchTarget = {
+      x: (t.clientX - rect.left) * (W / rect.width),
+      y: (t.clientY - rect.top) * (H / rect.height)
+    };
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => { e.preventDefault(); touchTarget = null; }, { passive: false });
+
+  // Start
+  startBtn.addEventListener('click', () => {
+    resetGame();
+    state = 'playing';
+    overlay.classList.add('hidden');
+  });
+
+  function resetGame() {
+    player.x = W/2; player.y = H/2;
+    player.hp = player.maxHp;
+    player.shootCooldown = 0;
+    player.invuln = 0;
+    bullets = [];
+    enemyBullets = [];
+    particles = [];
+    score = 0;
+    time = 0;
+    createTowers();
+    updateHUD();
+  }
+
+  function updateHUD() {
+    hpBar.textContent = `❤ HP: ${Math.max(0, Math.ceil(player.hp))}`;
+    scoreBar.textContent = `⭐ Score: ${score}`;
+  }
+
+  // Shooting
+  function shoot(targetX, targetY) {
+    const dx = targetX - player.x;
+    const dy = targetY - player.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const speed = 9;
+    bullets.push({
+      x: player.x, y: player.y,
+      vx: dx/dist*speed, vy: dy/dist*speed,
+      r: 5, life: 90, dmg: 12
+    });
+    // Muzzle particles
+    for (let i = 0; i < 4; i++) {
+      particles.push({
+        x: player.x, y: player.y,
+        vx: dx/dist*2 + (Math.random()-0.5)*2,
+        vy: dy/dist*2 + (Math.random()-0.5)*2,
+        life: 12, maxLife: 12, color: '#4dffb8', r: 2
+      });
+    }
+  }
+
+  function spawnExplosion(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 1 + Math.random() * 4;
+      particles.push({
+        x, y,
+        vx: Math.cos(ang) * spd,
+        vy: Math.sin(ang) * spd,
+        life: 30 + Math.random()*20, maxLife: 50,
+        color, r: 2 + Math.random()*3
+      });
+    }
+  }
+
+  // Update
+  function update() {
+    if (state !== 'playing') return;
+    time++;
+
+    // Player movement
+    let mx = 0, my = 0;
+    if (keys['w'] || keys['arrowup']) my -= 1;
+    if (keys['s'] || keys['arrowdown']) my += 1;
+    if (keys['a'] || keys['arrowleft']) mx -= 1;
+    if (keys['d'] || keys['arrowright']) mx += 1;
+
+    // Touch movement
+    if (touchTarget) {
+      const dx = touchTarget.x - player.x;
+      const dy = touchTarget.y - player.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 5) { mx = dx/d; my = dy/d; }
+    }
+
+    const len = Math.hypot(mx, my);
+    if (len > 0) {
+      mx /= len; my /= len;
+      player.x += mx * player.speed;
+      player.y += my * player.speed;
+    }
+    // Bounds
+    player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+    player.y = Math.max(player.r, Math.min(H - player.r, player.y));
+
+    // Shooting
+    player.shootCooldown--;
+    let firing = keys[' '] || mouse.down || (touchTarget && Math.hypot(touchTarget.x-player.x, touchTarget.y-player.y) > 40);
+    if (firing && player.shootCooldown <= 0) {
+      let tx = mouse.x, ty = mouse.y;
+      if (touchTarget) { tx = touchTarget.x; ty = touchTarget.y; }
+      shoot(tx, ty);
+      player.shootCooldown = 8;
+    }
+
+    if (player.invuln > 0) player.invuln--;
+
+    // Bullets update
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.vx; b.y += b.vy; b.life--;
+      if (b.life <= 0 || b.x < -20 || b.x > W+20 || b.y < -20 || b.y > H+20) {
+        bullets.splice(i, 1); continue;
+      }
+      // Hit towers
+      for (const t of towers) {
+        if (!t.alive) continue;
+        const d = Math.hypot(t.x - b.x, t.y - b.y);
+        if (d < t.r + b.r) {
+          t.hp -= b.dmg;
+          spawnExplosion(b.x, b.y, '#ffcc00', 5);
+          bullets.splice(i, 1);
+          if (t.hp <= 0) {
+            t.alive = false;
+            score += t.maxHp;
+            spawnExplosion(t.x, t.y, '#ff6600', 30);
+            updateHUD();
+          }
+          break;
+        }
+      }
+    }
+
+    // Enemy bullets
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+      const b = enemyBullets[i];
+      b.x += b.vx; b.y += b.vy; b.life--;
+      if (b.life <= 0 || b.x < -20 || b.x > W+20 || b.y < -20 || b.y > H+20) {
+        enemyBullets.splice(i, 1); continue;
+      }
+      // Hit player
+      const d = Math.hypot(player.x - b.x, player.y - b.y);
+      if (d < player.r + b.r && player.invuln <= 0) {
+        player.hp -= 10;
+        player.invuln = 40;
+        spawnExplosion(player.x, player.y, '#ff4466', 15);
+        enemyBullets.splice(i, 1);
+        updateHUD();
+        if (player.hp <= 0) {
+          state = 'gameover';
+          showOverlay('💀 ဂိမ်းပြီးပါပြီ', `Score: ${score}`, 'ပြန်စမယ်');
+        }
+      }
+    }
+
+    // Towers shoot
+    for (const t of towers) {
+      if (!t.alive) continue;
+      t.shootTimer--;
+      if (t.shootTimer <= 0) {
+        t.shootTimer = t.shootInterval + Math.random()*30;
+        const dx = player.x - t.x;
+        const dy = player.y - t.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const speed = 3.5;
+        enemyBullets.push({
+          x: t.x, y: t.y,
+          vx: dx/d*speed, vy: dy/d*speed,
+          r: 7, life: 240
+        });
+      }
+    }
+
+    // Particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.96; p.vy *= 0.96;
+      p.life--;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Win condition
+    if (towers.every(t => !t.alive)) {
+      state = 'win';
+      showOverlay('🏆 အောင်ပွဲ!', `Score: ${score}`, 'ပြန်စမယ်');
+    }
+  }
+
+  function showOverlay(title, sub, btn) {
+    overlay.innerHTML = `<h1>${title}</h1><p>${sub}</p><button id="startBtn2">${btn}</button>`;
+    overlay.classList.remove('hidden');
+    document.getElementById('startBtn2').addEventListener('click', () => {
+      resetGame();
+      state = 'playing';
+      overlay.classList.add('hidden');
+    });
+  }
+
+  // Draw
+  function draw() {
+    // Background
+    ctx.fillStyle = '#0f0f1e';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid
+    ctx.strokeStyle = 'rgba(77, 255, 184, 0.05)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 40) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // Towers
+    for (const t of towers) {
+      if (!t.alive) continue;
+      // Base
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r, 0, Math.PI*2);
+      const grad = ctx.createRadialGradient(t.x-8, t.y-8, 4, t.x, t.y, t.r);
+      grad.addColorStop(0, '#66ffaa');
+      grad.addColorStop(1, '#006644');
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.strokeStyle = '#4dffb8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // HP bar
+      const barW = 50, barH = 6;
+      const pct = t.hp / t.maxHp;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(t.x - barW/2, t.y - t.r - 14, barW, barH);
+      ctx.fillStyle = pct > 0.5 ? '#4dffb8' : pct > 0.25 ? '#ffcc00' : '#ff4466';
+      ctx.fillRect(t.x - barW/2, t.y - t.r - 14, barW * pct, barH);
+    }
+
+    // Enemy bullets
+    for (const b of enemyBullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fillStyle = '#ff4466';
+      ctx.fill();
+      ctx.shadowColor = '#ff4466';
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Player bullets
+    for (const b of bullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fillStyle = '#4dffb8';
+      ctx.fill();
+      ctx.shadowColor = '#4dffb8';
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    // Particles
+    for (const p of particles) {
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Player
+    if (state !== 'gameover') {
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      if (player.invuln > 0 && Math.floor(player.invuln/4) % 2 === 0) {
+        ctx.globalAlpha = 0.4;
+      }
+      // Glow
+      ctx.shadowColor = '#4dffb8';
+      ctx.shadowBlur = 20;
+      // Body
+      const pg = ctx.createRadialGradient(-4, -4, 2, 0, 0, player.r);
+      pg.addColorStop(0, '#aaffdd');
+      pg.addColorStop(1, '#00aa77');
+      ctx.beginPath();
+      ctx.arc(0, 0, player.r, 0, Math.PI*2);
+      ctx.fillStyle = pg;
+      ctx.fill();
+      ctx.strokeStyle = '#4dffb8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      // Aim indicator
+      const aimX = (touchTarget ? touchTarget.x : mouse.x) - player.x;
+      const aimY = (touchTarget ? touchTarget.y : mouse.y) - player.y;
+      const aLen = Math.hypot(aimX, aimY) || 1;
+      ctx.beginPath();
+      ctx.moveTo(aimX/aLen * player.r, aimY/aLen * player.r);
+      ctx.lineTo(aimX/aLen * (player.r + 12), aimY/aLen * (player.r + 12));
+      ctx.strokeStyle = '#4dffb8';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // HP bar top
+    if (state === 'playing') {
+      const pct = player.hp / player.maxHp;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(10, H - 30, 200, 18);
+      ctx.fillStyle = '#ff4466';
+      ctx.fillRect(10, H - 30, 200 * pct, 18);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(10, H - 30, 200, 18);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(`HP ${Math.ceil(player.hp)}`, 18, H - 17);
+    }
+  }
+
+  // Game loop
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  createTowers();
+  loop();
+})();
+</script>
+</body>
+</html>
